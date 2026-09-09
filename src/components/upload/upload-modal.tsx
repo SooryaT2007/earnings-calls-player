@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { upload } from "@vercel/blob/client";
+import { uploadPresigned } from "@vercel/blob/client";
 import { useAppState } from "@/components/providers/app-provider";
 import { parseFilename } from "@/lib/filename-parser";
 import { cn, formatBytes } from "@/lib/utils";
@@ -129,7 +129,7 @@ export function UploadModal({
       file: File,
       loadedRef: { current: number }
     ) => {
-      const result = await upload(file.name, file, {
+      const result = await uploadPresigned(file.name, file, {
         access: "public",
         handleUploadUrl: "/api/upload",
         multipart: true,

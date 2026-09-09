@@ -1,4 +1,8 @@
-import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
+import { issueSignedToken } from "@vercel/blob";
+import {
+  handleUploadPresigned,
+  type HandleUploadPresignedBody,
+} from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -31,27 +35,43 @@ const ALLOWED_CONTENT_TYPES = [
 ];
 
 /**
- * Token-exchange route for Vercel Blob client uploads. The browser calls
- * upload() from @vercel/blob/client which POSTs here to receive a scoped,
- * short-lived client token, then streams the file straight to Blob storage
- * with multipart chunking (bypassing the 4.5MB Vercel Functions payload limit).
+ * Token/URL-exchange route for Vercel Blob presigned client uploads.
+ * Uses OIDC (BLOB_STORE_ID) and BLOB_WEBHOOK_PUBLIC_KEY with presigned URLs,
+ * allowing browser-to-Blob streaming and multipart chunking for large files.
  */
 export async function POST(request: Request) {
-  const body = (await request.json()) as HandleUploadBody;
+  let body: HandleUploadPresignedBody;
+  try {
+    body = (await request.json()) as HandleUploadPresignedBody;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
   try {
-    const jsonResponse = await handleUpload({
+    const jsonResponse = await handleUploadPresigned({
       body,
       request,
-      onBeforeGenerateToken: async () => ({
-        allowedContentTypes: ALLOWED_CONTENT_TYPES,
-        maximumSizeInBytes: MAX_FILE_SIZE,
-        addRandomSuffix: true,
-      }),
+      getSignedToken: async () => {
+        const token = await issueSignedToken({
+          operations: ["put"],
+          allowedContentTypes: ALLOWED_CONTENT_TYPES,
+          maximumSizeInBytes: MAX_FILE_SIZE,
+        });
+
+        return {
+          token,
+          urlOptions: {
+            allowedContentTypes: ALLOWED_CONTENT_TYPES,
+            maximumSizeInBytes: MAX_FILE_SIZE,
+            addRandomSuffix: true,
+          },
+        };
+      },
     });
 
     return NextResponse.json(jsonResponse);
   } catch (error) {
+    console.error("Presigned upload error:", error);
     return NextResponse.json(
       { error: (error as Error).message },
       { status: 400 }
