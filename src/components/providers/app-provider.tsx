@@ -31,25 +31,25 @@ type AppState = {
     audio: string | null;
     pdf: string | null;
   } | null>;
-  refreshSessions: () => Promise<void>;
+  refreshSessions: (selectSessionId?: string) => Promise<Session[]>;
 };
 
 const AppStateContext = createContext<AppState | null>(null);
 
 function fetchCompaniesFn(): Promise<Company[]> {
-  return fetch("/api/companies").then((r) => {
+  return fetch("/api/companies", { cache: "no-store" }).then((r) => {
     if (!r.ok) throw new Error("Failed to load companies");
     return r.json() as Promise<Company[]>;
   });
 }
 
 function fetchSessionsFn(companyId: string): Promise<Session[]> {
-  return fetch(`/api/sessions?companyId=${encodeURIComponent(companyId)}`).then(
-    (r) => {
-      if (!r.ok) throw new Error("Failed to load sessions");
-      return r.json() as Promise<Session[]>;
-    }
-  );
+  return fetch(`/api/sessions?companyId=${encodeURIComponent(companyId)}`, {
+    cache: "no-store",
+  }).then((r) => {
+    if (!r.ok) throw new Error("Failed to load sessions");
+    return r.json() as Promise<Session[]>;
+  });
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -120,7 +120,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (controller.signal.aborted) return;
         setSessions(list);
         const savedId = persisted.sessionId;
-        const match = list.find((s) => s.id === savedId) ?? null;
+        const match = list.find((s) => s.id === savedId) ?? list[0] ?? null;
         setActiveSessionState(match);
       })
       .catch((e: unknown) => {
@@ -174,15 +174,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void refreshUrls();
   }, [refreshUrls]);
 
-  const refreshSessions = useCallback(async () => {
-    if (!activeCompany) return;
-    try {
-      const list = await fetchSessionsFn(activeCompany.id);
-      setSessions(list);
-    } catch {
-      // Keep the current list; upload failure is surfaced in the modal.
-    }
-  }, [activeCompany]);
+  const refreshSessions = useCallback(
+    async (selectSessionId?: string): Promise<Session[]> => {
+      if (!activeCompany) return [];
+      try {
+        const list = await fetchSessionsFn(activeCompany.id);
+        setSessions(list);
+        if (selectSessionId) {
+          const target = list.find((s) => s.id === selectSessionId);
+          if (target) {
+            setActiveSessionState(target);
+            setAudioUrls(null);
+            savePersistedState({
+              ...loadPersistedState(),
+              sessionId: target.id,
+            });
+          }
+        }
+        return list;
+      } catch (err) {
+        console.error("Failed to refresh sessions:", err);
+        return [];
+      }
+    },
+    [activeCompany]
+  );
 
   const value = useMemo<AppState>(
     () => ({

@@ -1,4 +1,4 @@
-import { getNotionClient, getDatabaseIds } from "./notion-client";
+import { getNotionClient, getDatabaseIds, normalizeNotionId } from "./notion-client";
 import { APIErrorCode } from "@notionhq/client";
 import { notionSchema } from "./notion-config";
 
@@ -50,7 +50,7 @@ export async function createSessionInNotion(
       ],
     },
     [companyProperty]: {
-      relation: [{ id: input.companyId }],
+      relation: [{ id: normalizeNotionId(input.companyId) }],
     },
   };
 

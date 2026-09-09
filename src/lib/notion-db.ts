@@ -113,15 +113,18 @@ export async function fetchCompanies(): Promise<Company[]> {
     sorts: [{ property: titleProp, direction: "ascending" }],
   });
 
-  return response.results.map((page) => ({
-    id: page.id,
-    name: getTitle(page.properties[titleProp]) || getTitle(page.properties["Name"]),
-  }));
+  return response.results
+    .map((page) => ({
+      id: page.id,
+      name: getTitle(page.properties[titleProp]) || getTitle(page.properties["Name"]),
+    }))
+    .filter((company) => company.name.trim().length > 0);
 }
 
 export async function fetchSessions(companyId: string): Promise<Session[]> {
   const { earningsSessions } = requireDbIds();
   const companyProp = notionSchema.sessions.companyProperty;
+  const normalizedCompanyId = normalizeNotionId(companyId);
 
   const response = await queryDatabase(earningsSessions, {
     page_size: 100,
@@ -129,7 +132,7 @@ export async function fetchSessions(companyId: string): Promise<Session[]> {
     // a select filter is invalid and Notion rejects the whole request.
     filter: {
       property: companyProp,
-      relation: { contains: companyId },
+      relation: { contains: normalizedCompanyId },
     },
     sorts: [
       { property: notionSchema.sessions.titleProperty, direction: "descending" },

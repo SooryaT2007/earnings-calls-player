@@ -173,7 +173,7 @@ export function UploadModal({
         throw new Error(body.error ?? "Upload failed");
       }
 
-      await refreshSessions();
+      await refreshSessions(body.pageId);
       setSuccess(true);
       setTimeout(() => onClose(), 900);
     } catch (err) {
