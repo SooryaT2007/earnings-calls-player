@@ -1,5 +1,4 @@
 import { getNotionClient, getDatabaseIds } from "./notion-client";
-import { uploadFileToNotion, attachFileToProperty } from "./notion-file-upload";
 import { APIErrorCode } from "@notionhq/client";
 import { notionSchema } from "./notion-config";
 
@@ -7,14 +6,20 @@ export type CreateSessionInput = {
   companyId: string;
   period: string;
   title?: string;
-  pdf?: { name: string; contentType: string; buffer: Uint8Array };
-  audio?: { name: string; contentType: string; buffer: Uint8Array };
+  pdf?: { name: string; url: string };
+  audio?: { name: string; url: string };
 };
 
+function fileProperty(file: { name: string; url: string }) {
+  return {
+    files: [{ name: file.name, type: "external", external: { url: file.url } }],
+  };
+}
+
 /**
- * Creates a new Earnings Session page in the Notion database and uploads
- * the provided PDF and audio files to their respective Files & Media
- * properties.
+ * Creates a new Earnings Session page in the Notion database and attaches
+ * the given PDF and audio URLs (e.g. Vercel Blob uploads) to their
+ * respective Files & Media properties as external files.
  *
  * Property names come from notionSchema (defaults to the "Companies
  * Research" workspace schema) and can be overridden via environment
@@ -39,8 +44,7 @@ export async function createSessionInNotion(
       title: [
         {
           text: {
-            content:
-              input.title ?? `${input.period} Earnings Call`,
+            content: input.title ?? `${input.period} Earnings Call`,
           },
         },
       ],
@@ -56,35 +60,23 @@ export async function createSessionInNotion(
     };
   }
 
-  const page = await notion.pages.create({
-    parent: { database_id: earningsSessions },
-    properties: properties as never,
-  });
+  if (input.pdf) {
+    properties[pdfProperty] = fileProperty(input.pdf);
+  }
 
-  const pageId = page.id;
+  if (input.audio) {
+    properties[audioProperty] = fileProperty(input.audio);
+  }
 
   try {
-    if (input.pdf) {
-      const id = await uploadFileToNotion(
-        input.pdf.name,
-        input.pdf.contentType,
-        input.pdf.buffer
-      );
-      await attachFileToProperty(pageId, pdfProperty, id, input.pdf.name);
-    }
+    const page = await notion.pages.create({
+      parent: { database_id: earningsSessions },
+      properties: properties as never,
+    });
 
-    if (input.audio) {
-      const id = await uploadFileToNotion(
-        input.audio.name,
-        input.audio.contentType,
-        input.audio.buffer
-      );
-      await attachFileToProperty(pageId, audioProperty, id, input.audio.name);
-    }
+    return { pageId: page.id };
   } catch (error) {
-    // Best-effort: if file attach fails, the page still exists with metadata.
-    console.error("Failed to attach files to session page", error);
-    // Re-throw so the caller can surface a real error; page may need cleanup.
+    console.error("Failed to create session page", error);
     const notionError = error as { code?: string };
     if (notionError.code === APIErrorCode.ObjectNotFound) {
       throw new Error(
@@ -93,6 +85,4 @@ export async function createSessionInNotion(
     }
     throw error;
   }
-
-  return { pageId };
 }

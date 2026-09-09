@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { upload } from "@vercel/blob/client";
 import { useAppState } from "@/components/providers/app-provider";
 import { parseFilename } from "@/lib/filename-parser";
 import { cn, formatBytes } from "@/lib/utils";
@@ -12,7 +13,7 @@ type SlotFile = {
 };
 
 const ACCEPTED_AUDIO =
-  "audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/webm,audio/x-m4a,.mp3,.wav,.m4a,.aac,.flac,.ogg,.oga,.webm";
+  "audio/*,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/webm,audio/x-m4a,.mp3,.wav,.m4a,.aac,.flac,.ogg,.oga,.webm,.opus";
 
 export function UploadModal({
   open,
@@ -29,8 +30,11 @@ export function UploadModal({
   const [title, setTitle] = useState("");
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const pdfLoadedRef = useRef(0);
+  const audioLoadedRef = useRef(0);
 
   const reset = useCallback(() => {
     setPdfFile(null);
@@ -39,6 +43,9 @@ export function UploadModal({
     setTitle("");
     setError(null);
     setSuccess(false);
+    setProgress(0);
+    pdfLoadedRef.current = 0;
+    audioLoadedRef.current = 0;
   }, []);
 
   // Close on Escape
@@ -105,18 +112,59 @@ export function UploadModal({
     setUploading(true);
     setError(null);
     setSuccess(false);
+    setProgress(0);
+    pdfLoadedRef.current = 0;
+    audioLoadedRef.current = 0;
 
-    const formData = new FormData();
-    formData.append("companyId", activeCompany.id);
-    formData.append("period", period.trim().toUpperCase());
-    if (title.trim()) formData.append("title", title.trim());
-    if (pdfFile) formData.append("pdf", pdfFile.file);
-    if (audioFile) formData.append("audio", audioFile.file);
+    const totalBytes =
+      (pdfFile?.file.size ?? 0) + (audioFile?.file.size ?? 0);
+
+    const refreshProgress = () => {
+      if (totalBytes <= 0) return;
+      const loaded = pdfLoadedRef.current + audioLoadedRef.current;
+      setProgress(Math.min(99, Math.round((loaded / totalBytes) * 100)));
+    };
+
+    const uploadToBlob = async (
+      file: File,
+      loadedRef: { current: number }
+    ) => {
+      const result = await upload(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+        multipart: true,
+        onUploadProgress: ({ loaded }) => {
+          loadedRef.current = loaded;
+          refreshProgress();
+        },
+      });
+      return result;
+    };
 
     try {
-      const res = await fetch("/api/upload", {
+      const [pdfResult, audioResult] = await Promise.all([
+        pdfFile ? uploadToBlob(pdfFile.file, pdfLoadedRef) : Promise.resolve(null),
+        audioFile
+          ? uploadToBlob(audioFile.file, audioLoadedRef)
+          : Promise.resolve(null),
+      ]);
+
+      setProgress(100);
+
+      const res = await fetch("/api/upload/attach", {
         method: "POST",
-        body: formData,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          companyId: activeCompany.id,
+          period: period.trim().toUpperCase(),
+          title: title.trim() || undefined,
+          pdf: pdfResult
+            ? { url: pdfResult.url, name: pdfResult.pathname }
+            : null,
+          audio: audioResult
+            ? { url: audioResult.url, name: audioResult.pathname }
+            : null,
+        }),
       });
 
       const body = (await res.json()) as { error?: string; pageId?: string };
@@ -132,6 +180,7 @@ export function UploadModal({
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
+      setTimeout(() => setProgress(0), 500);
     }
   }, [activeCompany, period, title, pdfFile, audioFile, onClose, refreshSessions]);
 
@@ -293,7 +342,8 @@ export function UploadModal({
 
         <div className="mt-6 flex items-center justify-between gap-3">
           <p className="text-xs text-zinc-600">
-            Files up to ~100MB are uploaded to Notion.
+            Files up to 500MB are uploaded directly to Vercel Blob and linked to
+            the session.
           </p>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={onClose} disabled={uploading}>
@@ -303,11 +353,12 @@ export function UploadModal({
               variant="accent"
               onClick={handleUpload}
               disabled={uploading || !activeCompany}
+              className="min-w-[140px]"
             >
               {uploading ? (
                 <>
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                  Uploading…
+                  {progress > 0 ? `${progress}%` : "Uploading…"}
                 </>
               ) : (
                 "Upload Session"
