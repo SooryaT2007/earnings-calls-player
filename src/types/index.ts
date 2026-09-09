@@ -1,35 +1,29 @@
-export interface SlideTimestampLog {
-  slide: number;
-  timestamp: number; // audio playback time in seconds when slide was navigated
-  recordedAt: number; // Date.now()
-}
-
-export interface EarningsCallTab {
+export type Company = {
   id: string;
-  title: string; // User-renamable tab title
-  audioUrl: string;
-  pdfUrl: string;
-  currentTime: number; // audio playback position in seconds (saved on close/switch)
-  currentSlide: number; // PDF page number (1-indexed, saved on change/close)
-  totalPages?: number;
-  duration?: number;
-  isLocalAudio?: boolean;
-  isLocalPdf?: boolean;
-  slideTimestamps?: SlideTimestampLog[];
-}
+  name: string;
+};
 
-export type PlaybackRate = 0.5 | 0.75 | 1 | 1.25 | 1.5 | 1.75 | 2;
+export type Session = {
+  id: string;
+  companyId: string;
+  period: string;
+  title: string;
+  createdAt: string;
+  audioUrl: string | null;
+  pdfUrl: string | null;
+  audioFileId: string | null;
+  pdfFileId: string | null;
+  lastListenedTimestamp: number | null;
+  audioDuration: number | null;
+};
 
-declare global {
-  interface Window {
-    electronAPI?: {
-      isElectron: boolean;
-      openAudioDialog: () => Promise<string | null>;
-      openPdfDialog: () => Promise<string | null>;
-      minimizeWindow: () => Promise<void>;
-      maximizeWindow: () => Promise<void>;
-      closeWindow: () => Promise<void>;
-      formatLocalPathToUrl: (filePath: string) => string;
-    };
-  }
-}
+export type DocumentMode = "horizontal" | "vertical";
+
+export type PlaybackSpeed = 1 | 1.25 | 1.5 | 1.75 | 2;
+
+export type UploadFileKind = "pdf" | "audio";
+
+export type ParsedFilename = {
+  period?: string;
+  kind?: UploadFileKind;
+};

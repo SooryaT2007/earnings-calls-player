@@ -1,0 +1,231 @@
+"use client";
+
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { Company, Session } from "@/types";
+import { loadPersistedState, savePersistedState } from "@/hooks/use-persisted-state";
+import { AudioPlayerProvider } from "./audio-player-provider";
+
+type AppState = {
+  companies: Company[];
+  loading: boolean;
+  error: string | null;
+
+  activeCompany: Company | null;
+  setActiveCompany: (c: Company | null) => void;
+
+  sessions: Session[];
+  sessionsLoading: boolean;
+  activeSession: Session | null;
+  setActiveSession: (s: Session | null) => void;
+
+  audioUrls: { audio: string | null; pdf: string | null } | null;
+  refreshUrls: () => Promise<{
+    audio: string | null;
+    pdf: string | null;
+  } | null>;
+  refreshSessions: () => Promise<void>;
+};
+
+const AppStateContext = createContext<AppState | null>(null);
+
+function fetchCompaniesFn(): Promise<Company[]> {
+  return fetch("/api/companies").then((r) => {
+    if (!r.ok) throw new Error("Failed to load companies");
+    return r.json() as Promise<Company[]>;
+  });
+}
+
+function fetchSessionsFn(companyId: string): Promise<Session[]> {
+  return fetch(`/api/sessions?companyId=${encodeURIComponent(companyId)}`).then(
+    (r) => {
+      if (!r.ok) throw new Error("Failed to load sessions");
+      return r.json() as Promise<Session[]>;
+    }
+  );
+}
+
+export function AppProvider({ children }: { children: React.ReactNode }) {
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const persisted = useMemo(() => loadPersistedState(), []);
+
+  const [activeCompany, setActiveCompanyState] = useState<Company | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [activeSession, setActiveSessionState] = useState<Session | null>(null);
+  const [audioUrls, setAudioUrls] = useState<{
+    audio: string | null;
+    pdf: string | null;
+  } | null>(null);
+
+  const sessionsAbortRef = useRef<AbortController | null>(null);
+
+  // Load companies once.
+  useEffect(() => {
+    let cancelled = false;
+    fetchCompaniesFn()
+      .then((list) => {
+        if (cancelled) return;
+        setCompanies(list);
+        if (list.length > 0) {
+          const savedId = persisted.companyId;
+          const match =
+            list.find((c) => c.id === savedId) ?? list[0];
+          setActiveCompanyState(match);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [persisted.companyId]);
+
+  const setActiveCompany = useCallback((company: Company | null) => {
+    setActiveCompanyState(company);
+    setActiveSessionState(null);
+    setSessions([]);
+    setAudioUrls(null);
+    savePersistedState({ ...loadPersistedState(), companyId: company?.id });
+  }, []);
+
+  // Fetch sessions for the active company.
+  useEffect(() => {
+    if (!activeCompany) {
+      setSessions([]);
+      setSessionsLoading(false);
+      return;
+    }
+    sessionsAbortRef.current?.abort();
+    const controller = new AbortController();
+    sessionsAbortRef.current = controller;
+    setSessionsLoading(true);
+
+    fetchSessionsFn(activeCompany.id)
+      .then((list) => {
+        if (controller.signal.aborted) return;
+        setSessions(list);
+        const savedId = persisted.sessionId;
+        const match = list.find((s) => s.id === savedId) ?? null;
+        setActiveSessionState(match);
+      })
+      .catch((e: unknown) => {
+        if (!controller.signal.aborted) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSessionsLoading(false);
+      });
+    return () => controller.abort();
+  }, [activeCompany, persisted.sessionId]);
+
+  const setActiveSession = useCallback((session: Session | null) => {
+    setActiveSessionState(session);
+    setAudioUrls(null);
+    savePersistedState({ ...loadPersistedState(), sessionId: session?.id });
+  }, []);
+
+  const refreshUrls = useCallback(async () => {
+    if (!activeSession) return null;
+    try {
+      const res = await fetch(
+        `/api/session-urls?pageId=${encodeURIComponent(activeSession.id)}`
+      );
+      if (!res.ok) throw new Error("Failed to refresh file URLs");
+      const data = (await res.json()) as {
+        audioUrl: string | null;
+        pdfUrl: string | null;
+      };
+      const urls = { audio: data.audioUrl, pdf: data.pdfUrl };
+      if (urls.audio || urls.pdf) {
+        setAudioUrls(urls);
+      }
+      return urls;
+    } catch {
+      return null;
+    }
+  }, [activeSession]);
+
+  // Load fresh URLs when a session is selected.
+  useEffect(() => {
+    if (!activeSession) {
+      setAudioUrls(null);
+      return;
+    }
+    void refreshUrls();
+  }, [activeSession, refreshUrls]);
+
+  const handleNeedUrlRefresh = useCallback(() => {
+    void refreshUrls();
+  }, [refreshUrls]);
+
+  const refreshSessions = useCallback(async () => {
+    if (!activeCompany) return;
+    try {
+      const list = await fetchSessionsFn(activeCompany.id);
+      setSessions(list);
+    } catch {
+      // Keep the current list; upload failure is surfaced in the modal.
+    }
+  }, [activeCompany]);
+
+  const value = useMemo<AppState>(
+    () => ({
+      companies,
+      loading,
+      error,
+      activeCompany,
+      setActiveCompany,
+      sessions,
+      sessionsLoading,
+      activeSession,
+      setActiveSession,
+      audioUrls,
+      refreshUrls,
+      refreshSessions,
+    }),
+    [
+      companies,
+      loading,
+      error,
+      activeCompany,
+      setActiveCompany,
+      sessions,
+      sessionsLoading,
+      activeSession,
+      setActiveSession,
+      audioUrls,
+      refreshUrls,
+      refreshSessions,
+    ]
+  );
+
+  return (
+    <AppStateContext.Provider value={value}>
+      <AudioPlayerProvider onNeedUrlRefresh={handleNeedUrlRefresh}>
+        {children}
+      </AudioPlayerProvider>
+    </AppStateContext.Provider>
+  );
+}
+
+export function useAppState(): AppState {
+  const ctx = useContext(AppStateContext);
+  if (!ctx) throw new Error("useAppState must be used within AppProvider");
+  return ctx;
+}
