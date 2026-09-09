@@ -14,16 +14,6 @@ type DatabaseQueryResponse = {
   has_more: boolean;
 };
 
-type QueryFilter =
-  | {
-      or?: unknown[];
-      and?: unknown[];
-      property?: string;
-      [key: string]: unknown;
-    }
-  | undefined;
-
-const companyCache = new Map<string, string>();
 const dataSourceIdCache = new Map<string, string>();
 let sessionsDbSchemaCache: Record<string, string> | null = null;
 
@@ -123,74 +113,30 @@ export async function fetchCompanies(): Promise<Company[]> {
     sorts: [{ property: titleProp, direction: "ascending" }],
   });
 
-  return response.results.map((page) => {
-    const name = getTitle(page.properties[titleProp]) || getTitle(page.properties["Name"]);
-    companyCache.set(page.id, name);
-    return { id: page.id, name };
-  });
+  return response.results.map((page) => ({
+    id: page.id,
+    name: getTitle(page.properties[titleProp]) || getTitle(page.properties["Name"]),
+  }));
 }
 
 export async function fetchSessions(companyId: string): Promise<Session[]> {
   const { earningsSessions } = requireDbIds();
   const companyProp = notionSchema.sessions.companyProperty;
 
-  const companyName = companyCache.get(companyId);
+  const response = await queryDatabase(earningsSessions, {
+    page_size: 100,
+    // In the user's schema Company is a relation property; filtering it with
+    // a select filter is invalid and Notion rejects the whole request.
+    filter: {
+      property: companyProp,
+      relation: { contains: companyId },
+    },
+    sorts: [
+      { property: notionSchema.sessions.titleProperty, direction: "descending" },
+    ],
+  });
 
-  const filter: QueryFilter = companyName
-    ? {
-        or: [
-          {
-            property: companyProp,
-            relation: { contains: companyId },
-          },
-          {
-            property: companyProp,
-            select: { equals: companyName },
-          },
-        ],
-      }
-    : {
-        property: companyProp,
-        relation: { contains: companyId },
-      };
-
-  let response: DatabaseQueryResponse;
-
-  try {
-    response = await queryDatabase(earningsSessions, {
-      page_size: 100,
-      filter,
-      sorts: [{ property: notionSchema.sessions.titleProperty, direction: "descending" }],
-    });
-  } catch {
-    // The Company property may be a select rather than a relation. Fall back
-    // to filtering on the company name.
-    response = await queryDatabase(earningsSessions, {
-      page_size: 100,
-      filter: companyName
-        ? { property: companyProp, select: { equals: companyName } }
-        : undefined,
-      sorts: [{ property: notionSchema.sessions.titleProperty, direction: "descending" }],
-    });
-  }
-
-  if (response.results.length) {
-    return response.results.map((page) => mapSession(page, companyId));
-  }
-
-  if (companyName) {
-    const fallback = await queryDatabase(earningsSessions, {
-      page_size: 100,
-      filter: {
-        property: companyProp,
-        select: { equals: companyName },
-      },
-      sorts: [{ property: notionSchema.sessions.titleProperty, direction: "descending" }],
-    });
-    return fallback.results.map((page) => mapSession(page, companyId));
-  }
-
-  return [];
+  return response.results.map((page) => mapSession(page, companyId));
 }
 
 function requireDbIds(): { companies: string; earningsSessions: string } {
