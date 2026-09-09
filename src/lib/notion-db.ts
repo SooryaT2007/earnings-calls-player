@@ -1,4 +1,4 @@
-import { getNotionClient } from "./notion-client";
+import { getNotionClient, normalizeNotionId } from "./notion-client";
 import { notionSchema } from "./notion-config";
 import { extractPeriodFromString } from "./filename-parser";
 import type { Company, Session } from "@/types";
@@ -24,23 +24,52 @@ type QueryFilter =
   | undefined;
 
 const companyCache = new Map<string, string>();
+const dataSourceIdCache = new Map<string, string>();
 let sessionsDbSchemaCache: Record<string, string> | null = null;
+
+/**
+ * Resolves the data source ID associated with a database. In the current
+ * Notion API, databases are queried through their data source
+ * (POST /v1/data_sources/{data_source_id}/query), so the app maps each
+ * database ID to its data source once and caches it.
+ */
+async function getDataSourceIdForDatabase(databaseId: string): Promise<string> {
+  const cached = dataSourceIdCache.get(databaseId);
+  if (cached) return cached;
+
+  const notion = getNotionClient();
+  const database = await notion.databases.retrieve({ database_id: databaseId });
+  const sources =
+    "data_sources" in database && database.data_sources ? database.data_sources : [];
+  const dataSourceId = sources[0]?.id;
+
+  if (!dataSourceId) {
+    throw new Error(
+      `Database ${databaseId} has no associated data source. Make sure it is shared with your integration.`
+    );
+  }
+
+  dataSourceIdCache.set(databaseId, dataSourceId);
+  return dataSourceId;
+}
 
 /**
  * Retrieves the Earnings Sessions database properties once and caches them,
  * mapping each property name to its Notion property type (e.g. "select",
- * "status", "number"). Used to write polymorphic properties correctly.
+ * "status", "number"). Property definitions live on the data source in the
+ * current API. Used to write polymorphic properties correctly.
  */
 export async function getSessionsDbSchema(): Promise<Record<string, string>> {
   if (sessionsDbSchemaCache) return sessionsDbSchemaCache;
   const notion = getNotionClient();
   const { earningsSessions } = requireDbIds();
-  const database = await notion.databases.retrieve({ database_id: earningsSessions });
+  const dataSourceId = await getDataSourceIdForDatabase(earningsSessions);
+
+  const source = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
   const properties: Record<string, string> = {};
-  const dbProperties = ("properties" in database
-    ? database.properties
-    : {}) as Record<string, unknown>;
-  for (const [name, prop] of Object.entries(dbProperties)) {
+  const dsProperties =
+    "properties" in source && source.properties ? source.properties : {};
+  for (const [name, prop] of Object.entries(dsProperties)) {
     if (prop && typeof prop === "object" && "type" in prop) {
       properties[name] = prop.type as string;
     }
@@ -54,10 +83,13 @@ export function clearSessionsDbSchemaCache(): void {
   sessionsDbSchemaCache = null;
 }
 
-function queryDatabase(databaseId: string, body: unknown) {
+async function queryDatabase(databaseId: string, body: unknown) {
   const notion = getNotionClient();
+  const dataSourceId = await getDataSourceIdForDatabase(databaseId);
+  // NOTE: paths are relative to the SDK's base URL (https://api.notion.com/v1)
+  // and must NOT include the "/v1/" segment.
   return notion.request<DatabaseQueryResponse>({
-    path: `/v1/databases/${databaseId}/query`,
+    path: `data_sources/${dataSourceId}/query`,
     method: "post",
     body: body as never,
   });
@@ -169,7 +201,10 @@ function requireDbIds(): { companies: string; earningsSessions: string } {
       "COMPANIES_DATABASE_ID and EARNINGS_SESSIONS_DATABASE_ID must be configured"
     );
   }
-  return { companies, earningsSessions };
+  return {
+    companies: normalizeNotionId(companies),
+    earningsSessions: normalizeNotionId(earningsSessions),
+  };
 }
 
 function mapSession(page: DatabaseQueryResponse["results"][number], companyId: string): Session {

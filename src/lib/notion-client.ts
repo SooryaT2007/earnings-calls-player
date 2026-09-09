@@ -27,7 +27,23 @@ export function getDatabaseIds(): { companies: string; earningsSessions: string 
     );
   }
 
-  return { companies, earningsSessions };
+  return {
+    companies: normalizeNotionId(companies),
+    earningsSessions: normalizeNotionId(earningsSessions),
+  };
+}
+
+/**
+ * Normalizes a Notion database/page ID into the hyphenated 8-4-4-4-12 form
+ * expected by the public API. Accepts the bare 32-hex-char string that is
+ * often copied from the Notion UI.
+ */
+export function normalizeNotionId(raw: string): string {
+  const id = raw.trim();
+  if (/^[0-9a-f]{32}$/i.test(id)) {
+    return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
+  }
+  return id;
 }
 
 export { APIErrorCode };
