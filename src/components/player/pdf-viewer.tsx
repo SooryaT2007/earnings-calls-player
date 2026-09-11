@@ -5,12 +5,12 @@ import React, {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import type { DocumentMode } from "@/types";
-import { Spinner, IconButton } from "@/components/ui/primitives";
-import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/primitives";
 import { Document, Page, pdfjs } from "react-pdf";
 
 // Configure pdfjs worker to matching version
@@ -30,8 +30,10 @@ type PdfViewerProps = {
   mode: DocumentMode;
   initialPage?: number;
   onPageChange?: (page: number) => void;
-  onLoadError?: () => void;
+  onLoadError?: (err?: Error) => void;
 };
+
+const PDFJS_VERSION = "3.11.174";
 
 function PdfViewerInner(
   { url, mode, initialPage, onPageChange, onLoadError }: PdfViewerProps,
@@ -157,16 +159,35 @@ function PdfViewerInner(
     return () => observer.disconnect();
   }, [mode, numPages, page, onPageChange]);
 
-  const handleLoadError = useCallback(() => {
-    if (failedRef.current) return;
-    failedRef.current = true;
-    setError("The presentation link may have expired or failed to load. Refreshing…");
-    onLoadError?.();
-  }, [onLoadError]);
+  const handleLoadError = useCallback(
+    (err?: Error) => {
+      if (failedRef.current) return;
+      failedRef.current = true;
+      console.error("PDF Load Error:", err);
+      setError(err?.message || "The presentation failed to load.");
+      onLoadError?.(err);
+    },
+    [onLoadError]
+  );
 
   const zoomIn = () => setScale((s) => Math.min(s + 0.15, 2.5));
   const zoomOut = () => setScale((s) => Math.max(s - 0.15, 0.6));
   const resetZoom = () => setScale(1);
+
+  // Use the same-origin PDF proxy route to avoid CORS, preflight OPTIONS, and worker restrictions
+  const fileSource = useMemo(() => {
+    if (!url) return null;
+    const proxiedUrl = url.startsWith("http")
+      ? `/api/pdf-proxy?url=${encodeURIComponent(url)}`
+      : url;
+
+    return {
+      url: proxiedUrl,
+      cMapUrl: `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/cmaps/`,
+      cMapPacked: true,
+      standardFontDataUrl: `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/standard_fonts/`,
+    };
+  }, [url]);
 
   if (error) {
     return (
@@ -184,7 +205,7 @@ function PdfViewerInner(
             d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
           />
         </svg>
-        <p className="text-center font-medium text-zinc-300">{error}</p>
+        <p className="max-w-md text-center font-medium text-zinc-300">{error}</p>
         <button
           onClick={() => {
             failedRef.current = false;
@@ -210,33 +231,35 @@ function PdfViewerInner(
           className="flex h-full w-full items-center justify-center overflow-auto p-4"
         >
           <div className="relative my-auto flex flex-col items-center">
-            <Document
-              file={url}
-              onLoadSuccess={({ numPages: total }) => {
-                setNumPages(total);
-                if (page > total) setPage(total);
-              }}
-              onLoadError={handleLoadError}
-              loading={
-                <div className="flex h-80 w-full items-center justify-center">
-                  <Spinner className="h-7 w-7" />
-                </div>
-              }
-              error={
-                <div className="py-12 text-center text-sm text-zinc-500">
-                  Unable to display presentation.
-                </div>
-              }
-            >
-              <Page
-                pageNumber={page}
-                width={horizontalPageWidth}
-                renderTextLayer={false}
-                renderAnnotationLayer={false}
-                className="overflow-hidden rounded-lg shadow-2xl shadow-black/70 ring-1 ring-white/10"
+            {fileSource && (
+              <Document
+                file={fileSource}
+                onLoadSuccess={({ numPages: total }) => {
+                  setNumPages(total);
+                  if (page > total) setPage(total);
+                }}
                 onLoadError={handleLoadError}
-              />
-            </Document>
+                loading={
+                  <div className="flex h-80 w-full items-center justify-center">
+                    <Spinner className="h-7 w-7" />
+                  </div>
+                }
+                error={
+                  <div className="py-12 text-center text-sm text-zinc-500">
+                    Unable to display presentation.
+                  </div>
+                }
+              >
+                <Page
+                  pageNumber={page}
+                  width={horizontalPageWidth}
+                  renderTextLayer={false}
+                  renderAnnotationLayer={false}
+                  className="overflow-hidden rounded-lg shadow-2xl shadow-black/70 ring-1 ring-white/10"
+                  onLoadError={handleLoadError}
+                />
+              </Document>
+            )}
           </div>
         </div>
       ) : (
@@ -245,45 +268,47 @@ function PdfViewerInner(
           className="h-full w-full overflow-y-auto p-6"
         >
           <div className="mx-auto flex w-full max-w-4xl flex-col items-center gap-6">
-            <Document
-              file={url}
-              onLoadSuccess={({ numPages: total }) => {
-                setNumPages(total);
-                if (page > total) setPage(total);
-              }}
-              onLoadError={handleLoadError}
-              loading={
-                <div className="flex h-80 items-center justify-center">
-                  <Spinner className="h-7 w-7" />
-                </div>
-              }
-              error={
-                <div className="py-12 text-center text-sm text-zinc-500">
-                  Unable to display presentation document.
-                </div>
-              }
-            >
-              {Array.from({ length: numPages ?? 0 }, (_, i) => i + 1).map((p) => (
-                <div
-                  key={p}
-                  ref={(el) => {
-                    if (el) pageRefs.current.set(p, el);
-                    else pageRefs.current.delete(p);
-                  }}
-                  data-page-number={p}
-                  className="w-full flex justify-center"
-                >
-                  <Page
-                    pageNumber={p}
-                    width={Math.min(containerWidth - 48, 860) * scale}
-                    renderTextLayer={false}
-                    renderAnnotationLayer={false}
-                    onLoadError={handleLoadError}
-                    className="overflow-hidden rounded-lg shadow-xl shadow-black/60 ring-1 ring-white/10"
-                  />
-                </div>
-              ))}
-            </Document>
+            {fileSource && (
+              <Document
+                file={fileSource}
+                onLoadSuccess={({ numPages: total }) => {
+                  setNumPages(total);
+                  if (page > total) setPage(total);
+                }}
+                onLoadError={handleLoadError}
+                loading={
+                  <div className="flex h-80 items-center justify-center">
+                    <Spinner className="h-7 w-7" />
+                  </div>
+                }
+                error={
+                  <div className="py-12 text-center text-sm text-zinc-500">
+                    Unable to display presentation document.
+                  </div>
+                }
+              >
+                {Array.from({ length: numPages ?? 0 }, (_, i) => i + 1).map((p) => (
+                  <div
+                    key={p}
+                    ref={(el) => {
+                      if (el) pageRefs.current.set(p, el);
+                      else pageRefs.current.delete(p);
+                    }}
+                    data-page-number={p}
+                    className="w-full flex justify-center"
+                  >
+                    <Page
+                      pageNumber={p}
+                      width={Math.min(containerWidth - 48, 860) * scale}
+                      renderTextLayer={false}
+                      renderAnnotationLayer={false}
+                      onLoadError={handleLoadError}
+                      className="overflow-hidden rounded-lg shadow-xl shadow-black/60 ring-1 ring-white/10"
+                    />
+                  </div>
+                ))}
+              </Document>
+            )}
 
             <p className="py-4 text-xs text-zinc-500">
               {numPages ? `${numPages} pages total` : "Loading pages…"}
