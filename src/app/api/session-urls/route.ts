@@ -4,6 +4,7 @@ import { notionSchema } from "@/lib/notion-config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
   const pageId = request.nextUrl.searchParams.get("pageId");

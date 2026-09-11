@@ -7,7 +7,10 @@ import { useAudioPlayer } from "@/components/providers/audio-player-provider";
 import { SplitWorkspace } from "@/components/layout/split-workspace";
 import { Spinner } from "@/components/ui/primitives";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
-import { loadPersistedState, savePersistedState } from "@/hooks/use-persisted-state";
+import {
+  getSessionPersistedState,
+  saveSessionPersistedState,
+} from "@/hooks/use-persisted-state";
 import type { DocumentMode } from "@/types";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +35,7 @@ const URL_REFRESH_MS = 45 * 60 * 1000;
 type PdfViewerHandle = {
   nextPage: () => void;
   prevPage: () => void;
+  goToPage: (p: number) => void;
   getCurrentPage: () => number | null;
 };
 
@@ -52,13 +56,29 @@ function InfoPane() {
             <dt className="text-xs uppercase tracking-wide text-zinc-600">
               Period
             </dt>
-            <dd className="text-zinc-300">{activeSession.period}</dd>
+            <dd className="text-zinc-300 font-medium text-sky-400">{activeSession.period}</dd>
           </div>
           <div>
             <dt className="text-xs uppercase tracking-wide text-zinc-600">
-              Title
+              Session Title
             </dt>
             <dd className="text-zinc-300">{activeSession.title}</dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-zinc-600">
+              Audio Recording
+            </dt>
+            <dd className="text-xs text-zinc-400 truncate">
+              {activeSession.audioFileId ?? "None attached"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-zinc-600">
+              Presentation PDF
+            </dt>
+            <dd className="text-xs text-zinc-400 truncate">
+              {activeSession.pdfFileId ?? "None attached"}
+            </dd>
           </div>
           <div>
             <dt className="text-xs uppercase tracking-wide text-zinc-600">
@@ -84,65 +104,69 @@ export function Workspace() {
   } = useAppState();
   const {
     load,
+    reset: resetAudio,
     currentTime: audioTime,
     speed,
   } = useAudioPlayer();
 
-  const [mode, setMode] = useState<DocumentMode>(
-    () => loadPersistedState().documentMode ?? "horizontal"
-  );
+  const [mode, setMode] = useState<DocumentMode>("horizontal");
   const pdfRef = useRef<PdfViewerHandle | null>(null);
   const urlLoadTimeRef = useRef<number>(0);
   const audioLoadedSessionRef = useRef<string | null>(null);
   const lastLoadedAudioUrlRef = useRef<string | null>(null);
-  const latestAudioTimeRef = useRef(0);
-  latestAudioTimeRef.current = audioTime;
-
   const [pdfUrlVersion, setPdfUrlVersion] = useState(0);
   const pdfPageRef = useRef(1);
 
-  // Restore persisted state when a session is selected.
-  const persisted = useRef(loadPersistedState());
-
-  // Reset per-session player state when switching sessions.
+  // When switching sessions, pause previous audio and initialize per-session state
   useEffect(() => {
-    if (!activeSession) return;
-    pdfPageRef.current =
-      persisted.current.sessionId === activeSession.id &&
-      persisted.current.pdfPage
-        ? persisted.current.pdfPage
-        : 1;
+    if (!activeSession) {
+      resetAudio();
+      audioLoadedSessionRef.current = null;
+      lastLoadedAudioUrlRef.current = null;
+      return;
+    }
+
+    const saved = getSessionPersistedState(activeSession.id);
+    const initialPage = saved.pdfPage ?? activeSession.lastViewedPage ?? 1;
+    const initialMode = saved.documentMode ?? activeSession.documentOrientation ?? "horizontal";
+
+    pdfPageRef.current = initialPage;
+    setMode(initialMode);
     lastLoadedAudioUrlRef.current = null;
     audioLoadedSessionRef.current = null;
     setPdfUrlVersion((v) => v + 1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSession]);
 
-  // Load audio whenever we have a URL we haven't used yet. On session switch
-  // this starts at the persisted timestamp; on a URL refresh (expiry/403)
-  // this preserves the in-memory playback position.
+    // If the session has no audio attachment at all, reset player immediately
+    if (!activeSession.audioFileId && !activeSession.audioUrl) {
+      resetAudio();
+    }
+  }, [activeSession, resetAudio]);
+
+  // Load audio for the active quarter once URLs are resolved
   useEffect(() => {
-    if (activeSession && audioUrls?.audio && lastLoadedAudioUrlRef.current !== audioUrls.audio) {
+    if (!activeSession) return;
+
+    if (audioUrls?.audio && lastLoadedAudioUrlRef.current !== audioUrls.audio) {
       const isNewSession = audioLoadedSessionRef.current !== activeSession.id;
-      const startAt =
-        isNewSession && persisted.current.sessionId === activeSession.id
-          ? persisted.current.audioTimestamp ?? 0
-          : latestAudioTimeRef.current || 0;
+      const saved = getSessionPersistedState(activeSession.id);
+      const startAt = isNewSession
+        ? (saved.audioTimestamp ?? activeSession.lastListenedTimestamp ?? 0)
+        : (saved.audioTimestamp ?? 0);
 
       lastLoadedAudioUrlRef.current = audioUrls.audio;
       audioLoadedSessionRef.current = activeSession.id;
       urlLoadTimeRef.current = Date.now();
-      load(audioUrls.audio, startAt);
+      load(audioUrls.audio, startAt, false);
+    } else if (audioUrls && !audioUrls.audio) {
+      // Quarter resolved with no audio
+      resetAudio();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSession, audioUrls, load]);
+  }, [activeSession, audioUrls, load, resetAudio]);
 
   const handleUrlFailure = useCallback(() => {
-    // Called when the audio element (or PDF) hits a 403/expired-URL error.
     void (async () => {
       await refreshUrls();
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshUrls]);
 
   // Proactively refresh URLs ~45 min after they were fetched.
@@ -163,43 +187,41 @@ export function Workspace() {
 
   useKeyboardShortcuts({ nextPage, prevPage });
 
-  const handlePdfPageChange = useCallback((page: number) => {
-    pdfPageRef.current = page;
-    savePersistedState({
-      ...loadPersistedState(),
-      sessionId: activeSession?.id,
-      pdfPage: page,
-      documentMode: mode,
-      playbackSpeed: speed,
-    });
-  }, [activeSession?.id, mode, speed]);
+  const handlePdfPageChange = useCallback(
+    (page: number) => {
+      if (!activeSession) return;
+      pdfPageRef.current = page;
+      saveSessionPersistedState(activeSession.id, {
+        pdfPage: page,
+        documentMode: mode,
+      });
+    },
+    [activeSession, mode]
+  );
 
-  // Sync currentTime to localStorage (throttled) while playing.
+  // Sync currentTime to localStorage per-quarter while playing
   useEffect(() => {
     if (!activeSession) return;
+    const sessionId = activeSession.id;
     const timer = setInterval(() => {
-      if (audioTime > 0) {
-        savePersistedState({
-          ...loadPersistedState(),
-          sessionId: activeSession.id,
+      if (audioTime >= 0) {
+        saveSessionPersistedState(sessionId, {
           audioTimestamp: audioTime,
           pdfPage: pdfPageRef.current,
           documentMode: mode,
-          playbackSpeed: speed,
         });
       }
-    }, 5_000);
+    }, 3_000);
     return () => clearInterval(timer);
-  }, [activeSession, audioTime, mode, speed]);
+  }, [activeSession, audioTime, mode]);
 
-  // Write back to Notion on unload.
+  // Write back progress to Notion on unload / interval
   useEffect(() => {
     const pageId = activeSession?.id;
     if (!pageId) return;
 
     const flush = () => {
-      const state = loadPersistedState();
-      if (!state.sessionId || state.sessionId !== pageId) return;
+      const state = getSessionPersistedState(pageId);
       const payload = JSON.stringify({
         pageId,
         timestampSeconds: state.audioTimestamp ?? 0,
@@ -227,7 +249,7 @@ export function Workspace() {
     window.addEventListener("beforeunload", onUnload);
     window.addEventListener("pagehide", onPageHide);
 
-    const interval = setInterval(flush, 30_000);
+    const interval = setInterval(flush, 25_000);
 
     return () => {
       window.removeEventListener("beforeunload", onUnload);
@@ -236,15 +258,18 @@ export function Workspace() {
     };
   }, [activeSession?.id]);
 
-  const handleModeToggle = useCallback((next: DocumentMode) => {
-    setMode(next);
-    savePersistedState({
-      ...loadPersistedState(),
-      documentMode: next,
-      pdfPage: pdfPageRef.current,
-      sessionId: activeSession?.id,
-    });
-  }, [activeSession?.id]);
+  const handleModeToggle = useCallback(
+    (next: DocumentMode) => {
+      setMode(next);
+      if (activeSession) {
+        saveSessionPersistedState(activeSession.id, {
+          documentMode: next,
+          pdfPage: pdfPageRef.current,
+        });
+      }
+    },
+    [activeSession]
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -283,10 +308,10 @@ export function Workspace() {
                 className={cn(
                   "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
                   mode === "horizontal"
-                    ? "bg-accent-600/20 text-accent-400"
+                    ? "bg-sky-500/20 text-sky-400 font-semibold"
                     : "text-zinc-400 hover:text-zinc-200"
                 )}
-                title="Presentation (one slide at a time)"
+                title="Presentation (slide by slide)"
               >
                 Presentation
               </button>
@@ -295,10 +320,10 @@ export function Workspace() {
                 className={cn(
                   "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
                   mode === "vertical"
-                    ? "bg-accent-600/20 text-accent-400"
+                    ? "bg-sky-500/20 text-sky-400 font-semibold"
                     : "text-zinc-400 hover:text-zinc-200"
                 )}
-                title="Document (scrollable pages)"
+                title="Document (continuous scroll)"
               >
                 Document
               </button>
@@ -306,7 +331,7 @@ export function Workspace() {
           </div>
 
           <SplitWorkspace
-            defaultSize={72}
+            defaultSize={74}
             left={
               audioUrls?.pdf ? (
                 <PdfViewer
@@ -319,10 +344,20 @@ export function Workspace() {
                   onLoadError={handleUrlFailure}
                 />
               ) : (
-                <div className="flex h-full items-center justify-center text-sm text-zinc-600">
-                  {audioUrls && !audioUrls.pdf
-                    ? "No presentation attached to this session."
-                    : "Loading presentation…"}
+                <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-zinc-500 bg-surface-950 p-6">
+                  {audioUrls && !audioUrls.pdf ? (
+                    <>
+                      <svg className="h-10 w-10 text-surface-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                      </svg>
+                      <p>No presentation attached to this session.</p>
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-2 text-zinc-400">
+                      <Spinner className="h-5 w-5" />
+                      <span>Loading presentation…</span>
+                    </div>
+                  )}
                 </div>
               )
             }

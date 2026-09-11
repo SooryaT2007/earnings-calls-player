@@ -104,6 +104,19 @@ function getFileName(dict: unknown): string | null {
   return files?.[0]?.name ?? null;
 }
 
+function getNumber(dict: unknown): number | null {
+  const value = (dict as { number?: number | null } | undefined)?.number;
+  return typeof value === "number" ? value : null;
+}
+
+function getSelectOrStatus(dict: unknown): "horizontal" | "vertical" | null {
+  const select = (dict as { select?: { name?: string } } | undefined)?.select?.name;
+  if (select === "horizontal" || select === "vertical") return select;
+  const status = (dict as { status?: { name?: string } } | undefined)?.status?.name;
+  if (status === "horizontal" || status === "vertical") return status;
+  return null;
+}
+
 export async function fetchCompanies(): Promise<Company[]> {
   const { companies } = requireDbIds();
   const titleProp = notionSchema.companies.titleProperty;
@@ -128,8 +141,6 @@ export async function fetchSessions(companyId: string): Promise<Session[]> {
 
   const response = await queryDatabase(earningsSessions, {
     page_size: 100,
-    // In the user's schema Company is a relation property; filtering it with
-    // a select filter is invalid and Notion rejects the whole request.
     filter: {
       property: companyProp,
       relation: { contains: normalizedCompanyId },
@@ -184,7 +195,11 @@ function mapSession(page: DatabaseQueryResponse["results"][number], companyId: s
     pdfUrl: null,
     audioFileId: getFileName(props[notionSchema.sessions.audioProperty]),
     pdfFileId: getFileName(props[notionSchema.sessions.pdfProperty]),
-    lastListenedTimestamp: null,
+    lastListenedTimestamp: getNumber(props[notionSchema.sessions.latestTimestampProperty]),
     audioDuration: null,
+    lastViewedPage: getNumber(props[notionSchema.sessions.lastViewedPageProperty]),
+    documentOrientation: getSelectOrStatus(
+      props[notionSchema.sessions.documentOrientationProperty]
+    ),
   };
 }

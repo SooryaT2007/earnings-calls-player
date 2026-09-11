@@ -15,6 +15,8 @@ export type Session = {
   pdfFileId: string | null;
   lastListenedTimestamp: number | null;
   audioDuration: number | null;
+  lastViewedPage?: number | null;
+  documentOrientation?: DocumentMode | null;
 };
 
 export type DocumentMode = "horizontal" | "vertical";

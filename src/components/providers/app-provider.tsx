@@ -151,12 +151,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         audioUrl: string | null;
         pdfUrl: string | null;
       };
-      const urls = { audio: data.audioUrl, pdf: data.pdfUrl };
-      if (urls.audio || urls.pdf) {
-        setAudioUrls(urls);
-      }
+      const urls = { audio: data.audioUrl ?? null, pdf: data.pdfUrl ?? null };
+      setAudioUrls(urls);
       return urls;
     } catch {
+      setAudioUrls({ audio: null, pdf: null });
       return null;
     }
   }, [activeSession]);
