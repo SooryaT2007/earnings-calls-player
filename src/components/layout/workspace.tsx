@@ -96,7 +96,13 @@ function InfoPane() {
   );
 }
 
-export function Workspace() {
+export function Workspace({
+  onOpenUpload,
+  onOpenShortcuts,
+}: {
+  onOpenUpload?: () => void;
+  onOpenShortcuts?: () => void;
+} = {}) {
   const {
     activeSession,
     audioUrls,
@@ -182,10 +188,36 @@ export function Workspace() {
     return () => clearInterval(timer);
   }, [activeSession, refreshUrls]);
 
+  const handleModeToggle = useCallback(
+    (next: DocumentMode) => {
+      setMode(next);
+      if (activeSession) {
+        saveSessionPersistedState(activeSession.id, {
+          documentMode: next,
+          pdfPage: pdfPageRef.current,
+        });
+      }
+    },
+    [activeSession]
+  );
+
   const nextPage = useCallback(() => pdfRef.current?.nextPage(), []);
   const prevPage = useCallback(() => pdfRef.current?.prevPage(), []);
+  const firstPage = useCallback(() => pdfRef.current?.goToPage(1), []);
+  const lastPage = useCallback(() => pdfRef.current?.goToPage(9999), []);
+  const toggleDocumentMode = useCallback(() => {
+    handleModeToggle(mode === "horizontal" ? "vertical" : "horizontal");
+  }, [handleModeToggle, mode]);
 
-  useKeyboardShortcuts({ nextPage, prevPage });
+  useKeyboardShortcuts({
+    nextPage,
+    prevPage,
+    firstPage,
+    lastPage,
+    toggleDocumentMode,
+    onOpenUpload,
+    onOpenShortcuts,
+  });
 
   const handlePdfPageChange = useCallback(
     (page: number) => {
@@ -257,19 +289,6 @@ export function Workspace() {
       clearInterval(interval);
     };
   }, [activeSession?.id]);
-
-  const handleModeToggle = useCallback(
-    (next: DocumentMode) => {
-      setMode(next);
-      if (activeSession) {
-        saveSessionPersistedState(activeSession.id, {
-          documentMode: next,
-          pdfPage: pdfPageRef.current,
-        });
-      }
-    },
-    [activeSession]
-  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

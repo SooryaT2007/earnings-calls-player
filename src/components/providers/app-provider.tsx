@@ -15,8 +15,13 @@ import { AudioPlayerProvider } from "./audio-player-provider";
 
 type AppState = {
   companies: Company[];
+  filteredCompanies: Company[];
   loading: boolean;
   error: string | null;
+
+  sectors: string[];
+  activeSector: string;
+  setActiveSector: (s: string) => void;
 
   activeCompany: Company | null;
   setActiveCompany: (c: Company | null) => void;
@@ -59,6 +64,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const persisted = useMemo(() => loadPersistedState(), []);
 
+  const [activeSector, setActiveSectorState] = useState<string>(
+    () => persisted.sector || "All"
+  );
   const [activeCompany, setActiveCompanyState] = useState<Company | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -70,7 +78,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const sessionsAbortRef = useRef<AbortController | null>(null);
 
-  // Load companies once.
+  // Derive unique sectors across all loaded companies
+  const sectors = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of companies) {
+      if (Array.isArray(c.sectors)) {
+        for (const s of c.sectors) {
+          if (s) set.add(s);
+        }
+      }
+    }
+    return ["All", ...Array.from(set)];
+  }, [companies]);
+
+  // Companies filtered by currently selected sector
+  const filteredCompanies = useMemo(() => {
+    if (activeSector === "All") return companies;
+    return companies.filter((c) => c.sectors?.includes(activeSector));
+  }, [companies, activeSector]);
+
+  // Load companies once on mount
   useEffect(() => {
     let cancelled = false;
     fetchCompaniesFn()
@@ -79,8 +106,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setCompanies(list);
         if (list.length > 0) {
           const savedId = persisted.companyId;
-          const match =
-            list.find((c) => c.id === savedId) ?? list[0];
+          const match = list.find((c) => c.id === savedId) ?? list[0];
           setActiveCompanyState(match);
         }
       })
@@ -94,6 +120,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [persisted.companyId]);
+
+  const setActiveSector = useCallback(
+    (sector: string) => {
+      setActiveSectorState(sector);
+      savePersistedState({ ...loadPersistedState(), sector });
+
+      // If activeCompany is not in the new sector, switch to first company in sector
+      if (sector !== "All") {
+        const inSector = companies.filter((c) => c.sectors?.includes(sector));
+        if (inSector.length > 0 && (!activeCompany || !activeCompany.sectors?.includes(sector))) {
+          setActiveCompanyState(inSector[0]);
+          setActiveSessionState(null);
+          setSessions([]);
+          setAudioUrls(null);
+          savePersistedState({
+            ...loadPersistedState(),
+            sector,
+            companyId: inSector[0].id,
+          });
+        }
+      }
+    },
+    [companies, activeCompany]
+  );
 
   const setActiveCompany = useCallback((company: Company | null) => {
     setActiveCompanyState(company);
@@ -202,8 +252,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<AppState>(
     () => ({
       companies,
+      filteredCompanies,
       loading,
       error,
+      sectors,
+      activeSector,
+      setActiveSector,
       activeCompany,
       setActiveCompany,
       sessions,
@@ -216,8 +270,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       companies,
+      filteredCompanies,
       loading,
       error,
+      sectors,
+      activeSector,
+      setActiveSector,
       activeCompany,
       setActiveCompany,
       sessions,

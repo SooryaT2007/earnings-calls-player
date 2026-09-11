@@ -117,6 +117,16 @@ function getSelectOrStatus(dict: unknown): "horizontal" | "vertical" | null {
   return null;
 }
 
+function getMultiSelect(dict: unknown): string[] {
+  const list = (dict as { multi_select?: Array<{ name: string }> } | undefined)?.multi_select;
+  return Array.isArray(list) ? list.map((item) => item.name).filter(Boolean) : [];
+}
+
+function getSelect(dict: unknown): string | null {
+  const value = (dict as { select?: { name?: string } } | undefined)?.select?.name;
+  return value ?? null;
+}
+
 export async function fetchCompanies(): Promise<Company[]> {
   const { companies } = requireDbIds();
   const titleProp = notionSchema.companies.titleProperty;
@@ -130,6 +140,9 @@ export async function fetchCompanies(): Promise<Company[]> {
     .map((page) => ({
       id: page.id,
       name: getTitle(page.properties[titleProp]) || getTitle(page.properties["Name"]),
+      ticker: getRichText(page.properties["Ticker"]) || null,
+      sectors: getMultiSelect(page.properties["Sector"]),
+      region: getSelect(page.properties["Region"]),
     }))
     .filter((company) => company.name.trim().length > 0);
 }

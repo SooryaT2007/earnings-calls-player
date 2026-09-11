@@ -7,6 +7,7 @@ export type SessionPlaybackState = {
 };
 
 export type PersistedState = {
+  sector?: string;
   companyId?: string;
   sessionId?: string;
   playbackSpeed?: PlaybackSpeed;

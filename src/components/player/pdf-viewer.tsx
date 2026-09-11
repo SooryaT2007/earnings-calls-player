@@ -288,25 +288,28 @@ function PdfViewerInner(
                 }
               >
                 {Array.from({ length: numPages ?? 0 }, (_, i) => i + 1).map((p) => (
-                  <div
-                    key={p}
-                    ref={(el) => {
-                      if (el) pageRefs.current.set(p, el);
-                      else pageRefs.current.delete(p);
-                    }}
-                    data-page-number={p}
-                    className="w-full flex justify-center"
-                  >
-                    <Page
-                      pageNumber={p}
-                      width={Math.min(containerWidth - 48, 860) * scale}
-                      renderTextLayer={false}
-                      renderAnnotationLayer={false}
-                      onLoadError={handleLoadError}
-                      className="overflow-hidden rounded-lg shadow-xl shadow-black/60 ring-1 ring-white/10"
-                    />
+                <div
+                  key={p}
+                  ref={(el) => {
+                    if (el) pageRefs.current.set(p, el);
+                    else pageRefs.current.delete(p);
+                  }}
+                  data-page-number={p}
+                  className="w-full flex flex-col items-center mb-14 last:mb-8"
+                >
+                  <div className="flex items-center justify-between w-full max-w-[880px] px-3 mb-2 text-[11px] font-mono text-zinc-500">
+                    <span className="rounded-full bg-surface-850 px-2 py-0.5 text-zinc-400">Page {p} of {numPages}</span>
                   </div>
-                ))}
+                  <Page
+                    pageNumber={p}
+                    width={Math.min(containerWidth - 64, 880) * scale}
+                    renderTextLayer={false}
+                    renderAnnotationLayer={false}
+                    onLoadError={handleLoadError}
+                    className="overflow-hidden rounded-xl shadow-2xl shadow-black/80 ring-1 ring-white/10"
+                  />
+                </div>
+              ))}
               </Document>
             )}
 

@@ -1,6 +1,9 @@
 export type Company = {
   id: string;
   name: string;
+  ticker?: string | null;
+  sectors?: string[];
+  region?: string | null;
 };
 
 export type Session = {
